@@ -54,6 +54,11 @@
 
     <hr>
     <label class="switch-row">
+      <span>Winter map</span>
+      <input type="checkbox" role="switch" id="winter">
+    </label>
+    <p class="stats-note">A winter-styled map, not live snow cover. Check conditions before you go.</p>
+    <label class="switch-row">
       <span>Slopes over 30°</span>
       <input type="checkbox" role="switch" id="slope" checked>
     </label>
@@ -68,7 +73,7 @@
 
     <hr>
     <p class="note">Planning aid only, not avalanche advice. Read the <a href="https://whiterisk.ch/en/conditions" target="_blank" rel="noopener">SLF avalanche bulletin</a> before every tour.</p>
-    <p class="credits">Photos, slopes and routes © swisstopo. Terrain © Mapterhorn.</p>
+    <p class="credits">Photos, maps, slopes and routes © swisstopo. Terrain © Mapterhorn.</p>
   </div>
 </section>
 
@@ -116,6 +121,7 @@
         version: 8,
         sources: {
           photo: { type: 'raster', tiles: [wmts('ch.swisstopo.swissimage', 'jpeg')], tileSize: 256, maxzoom: 20, attribution: SWISSTOPO },
+          winter: { type: 'raster', tiles: [wmts('ch.swisstopo.pixelkarte-farbe-winter', 'jpeg')], tileSize: 256, maxzoom: 17, attribution: SWISSTOPO },
           slope: { type: 'raster', tiles: [wmts('ch.swisstopo.hangneigung-ueber_30', 'png')], tileSize: 256, maxzoom: 17, attribution: SWISSTOPO },
           tours: { type: 'raster', tiles: [wmts('ch.swisstopo-karto.skitouren', 'png')], tileSize: 256, maxzoom: 17, attribution: SWISSTOPO },
           terrain: { type: 'raster-dem', url: 'https://tiles.mapterhorn.com/tilejson.json', encoding: 'terrarium', tileSize: 512 }
@@ -123,6 +129,7 @@
         layers: [
           { id: 'background', type: 'background', paint: { 'background-color': '#dfe7ef' } },
           { id: 'photo', type: 'raster', source: 'photo' },
+          { id: 'winter', type: 'raster', source: 'winter', layout: { visibility: 'none' } },
           { id: 'slope', type: 'raster', source: 'slope', paint: { 'raster-opacity': 0.6 } },
           { id: 'tours', type: 'raster', source: 'tours', layout: { visibility: 'none' } }
         ],
@@ -174,12 +181,16 @@
 
   const applyLayers = () => {
     try {
+      const winter = $('winter').checked;
+      map.setLayoutProperty('photo', 'visibility', winter ? 'none' : 'visible');
+      map.setLayoutProperty('winter', 'visibility', winter ? 'visible' : 'none');
       map.setLayoutProperty('slope', 'visibility', $('slope').checked ? 'visible' : 'none');
       map.setLayoutProperty('tours', 'visibility', $('tours').checked ? 'visible' : 'none');
     } catch (error) {
       // The style isn't ready yet; applyLayers runs again on load.
     }
   };
+  $('winter').addEventListener('change', applyLayers);
   $('slope').addEventListener('change', applyLayers);
   $('tours').addEventListener('change', applyLayers);
 
