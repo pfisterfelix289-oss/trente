@@ -9,9 +9,7 @@
   <meta property="og:title" content="Trente: a 3D ski touring map of Verbier">
   <meta property="og:description" content="A free 3D map for planning ski tours around Verbier.">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230c2a4d'/%3E%3Cpath d='M6 24H26M6 24 23.3 14M16 24a10 10 0 0 0-1.34-5' fill='none' stroke='%232bc6d8' stroke-width='3' stroke-linecap='round'/%3E%3C/svg%3E">
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Next:wght@400;700;800&display=swap">
+  <link rel="preload" href="atkinson-hyperlegible-next.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -155,6 +153,19 @@
     </div>
   </section>
 
+  <section class="section" aria-labelledby="privacy">
+    <div class="wrap">
+      <h2 id="privacy">Privacy</h2>
+      <ul class="credit-list">
+        <li><strong>No accounts or tracking.</strong> Trente has no sign-up, no cookies, no ads and no analytics.</li>
+        <li><strong>Your location stays on your device.</strong> It's only used when you tap the location button, to draw your dot on the map. It's never sent anywhere or stored.</li>
+        <li><strong>Your routes stay in your browser.</strong> A route you draw disappears when you close the page, unless you save it as a GPX file.</li>
+        <li><strong>Map data comes straight from its providers.</strong> To show the map, your browser loads files from GitHub (which hosts this site), swisstopo, Mapterhorn and jsDelivr (the map engine). Like any website, they see your IP address, and their own privacy policies apply.</li>
+      </ul>
+      <p class="small">Found a mistake on the map? <a class="report-link" href="https://github.com/pfisterfelix289-oss/trente/issues/new" target="_blank" rel="noopener">Report a problem</a>. Reports are public and need a free GitHub account, so don't include personal details.</p>
+    </div>
+  </section>
+
   <section class="section" aria-labelledby="credits">
     <div class="wrap">
       <h2 id="credits">Data and credits</h2>
@@ -163,9 +174,10 @@
         <li><strong>Community routes:</strong> <a href="https://www.camptocamp.org" target="_blank" rel="noopener">Camptocamp.org</a> contributors, <a href="https://creativecommons.org/licenses/by-sa/3.0/" target="_blank" rel="noopener">CC BY-SA 3.0</a>, downloaded weekly</li>
         <li><strong>Terrain:</strong> <a href="https://mapterhorn.com/attribution" target="_blank" rel="noopener">© Mapterhorn</a>, built from open elevation data</li>
         <li><strong>Map engine:</strong> <a href="https://maplibre.org" target="_blank" rel="noopener">MapLibre GL JS</a>, open source</li>
+        <li><strong>Font:</strong> <a href="https://github.com/googlefonts/atkinson-hyperlegible-next" target="_blank" rel="noopener">Atkinson Hyperlegible Next</a>, © The Atkinson Hyperlegible Next Project Authors, SIL Open Font Licence</li>
         <li><strong>Avalanche bulletin:</strong> <a href="https://www.slf.ch/en/" target="_blank" rel="noopener">WSL Institute for Snow and Avalanche Research SLF</a>, linked rather than copied</li>
       </ul>
-      <p class="small">Trente isn't affiliated with swisstopo, the SLF, Mapterhorn, Strava or FATMAP.</p>
+      <p class="small">Trente isn't affiliated with swisstopo, the SLF, Mapterhorn, Camptocamp, Strava or FATMAP.</p>
     </div>
   </section>
 </main>
@@ -173,9 +185,18 @@
 <footer class="site-footer">
   <div class="wrap">
     <p>Made by a student who skis in Verbier.</p>
-    <a href="map.html">Open the map</a>
+    <p class="footer-links"><a href="map.html">Open the map</a> <a class="report-link" href="https://github.com/pfisterfelix289-oss/trente/issues/new" target="_blank" rel="noopener">Report a problem</a></p>
   </div>
 </footer>
 
+<script>
+  // Point "Report a problem" at this site's own GitHub repository, even after a username change.
+  (() => {
+    const host = location.hostname.match(/^([a-z0-9-]+)\.github\.io$/i);
+    const repo = location.pathname.split('/').filter(Boolean)[0];
+    if (!host || !repo || /\./.test(repo)) return;
+    document.querySelectorAll('.report-link').forEach((a) => { a.href = `https://github.com/${host[1]}/${repo}/issues/new`; });
+  })();
+</script>
 </body>
 </html>

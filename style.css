@@ -1,3 +1,13 @@
+/* Atkinson Hyperlegible Next, served from this site rather than Google, so visitors'
+   addresses aren't sent to Google. © The Atkinson Hyperlegible Next Project Authors, SIL Open Font Licence 1.1. */
+@font-face {
+  font-family: "Atkinson Hyperlegible Next";
+  font-style: normal;
+  font-weight: 200 800;
+  font-display: swap;
+  src: url("atkinson-hyperlegible-next.woff2") format("woff2-variations"), url("atkinson-hyperlegible-next.woff2") format("woff2");
+}
+
 /* Trente: shared styles for index.html (about page) and map.html (map page).
    Colours: deep night blue, snow white and one glacier-turquoise accent.
    Type: Atkinson Hyperlegible Next, chosen because numbers like 35° and 1268 m
@@ -342,6 +352,16 @@ a:hover {
   display: flex;
   flex-wrap: wrap;
   justify-content: space-between;
+  gap: 8px 24px;
+}
+
+.site-footer p {
+  margin: 0;
+}
+
+.footer-links {
+  display: flex;
+  flex-wrap: wrap;
   gap: 8px 24px;
 }
 
