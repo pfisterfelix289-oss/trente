@@ -58,13 +58,25 @@
       <input type="checkbox" role="switch" id="winter">
     </label>
     <p class="stats-note">A winter-styled map, not live snow cover. Check conditions before you go.</p>
+    <p class="group-label">Slopes over 30°</p>
     <label class="switch-row">
-      <span>Slopes over 30°</span>
+      <span>Colour by steepness</span>
       <input type="checkbox" role="switch" id="slope" checked>
     </label>
+    <label class="switch-row">
+      <span>Colour by direction</span>
+      <input type="checkbox" role="switch" id="aspect">
+    </label>
+    <p class="stats-note" id="aspect-note" hidden>Shows which way each slope of 30° or more faces, so you can match it to the danger directions in the bulletin. Worked out from the terrain, so small features can be missed.</p>
+    <label class="range-row">
+      <span>Colour strength</span>
+      <input type="range" id="strength" min="20" max="100" step="5" value="70" aria-describedby="strength-help">
+    </label>
+    <p class="visually-hidden" id="strength-help">Changes how strongly the slope colours cover the map.</p>
     <details class="key">
       <summary>Colour key</summary>
-      <img src="https://api3.geo.admin.ch/static/images/legends/ch.swisstopo.hangneigung-ueber_30_en.png" alt="swisstopo colour key for the slope classes over 30°" loading="lazy">
+      <img id="key-steep" src="https://api3.geo.admin.ch/static/images/legends/ch.swisstopo.hangneigung-ueber_30_en.png" alt="swisstopo colour key for the slope classes over 30°" loading="lazy">
+      <div id="key-aspect" hidden></div>
     </details>
     <label class="switch-row">
       <span>Ski touring routes</span>
@@ -74,7 +86,7 @@
       <span>Community routes</span>
       <input type="checkbox" role="switch" id="c2c">
     </label>
-    <p class="stats-note" id="c2c-status">Ski tours written up by Camptocamp members. Switch on and zoom in to see them.</p>
+    <p class="stats-note" id="c2c-status">Ski tours written up by Camptocamp members. Switch on to see them.</p>
 
     <hr>
     <p class="note">Planning aid only, not avalanche advice. Read the <a href="https://whiterisk.ch/en/conditions" target="_blank" rel="noopener">SLF avalanche bulletin</a> before every tour.</p>
@@ -112,6 +124,131 @@
   const wmts = (layer, ext) =>
     `https://wmts.geo.admin.ch/1.0.0/${layer}/default/current/3857/{z}/{x}/{y}.${ext}`;
 
+
+  // Slope colours. Opacity fades in as you zoom, because zoomed-out slope colours
+  // are mostly noise; the strength slider scales it.
+  const DEFAULT_STRENGTH = 70;
+  const slopeOpacity = (strength) => {
+    const s = strength / 100;
+    return ['interpolate', ['linear'], ['zoom'], 10, 0, 11, +(0.45 * s).toFixed(3), 14, +(0.8 * s).toFixed(3), 16, +(0.9 * s).toFixed(3)];
+  };
+
+  // Slope direction (aspect), worked out in the browser from the Mapterhorn
+  // terrain tiles the 3D view already uses, so it works anywhere they cover.
+  const TERRAIN_URL = 'https://tiles.mapterhorn.com/tilejson.json';
+  const STEEP_DEG = 30;
+  const ASPECTS = [
+    { name: 'N', rgb: [37, 99, 235] },
+    { name: 'NE', rgb: [6, 182, 212] },
+    { name: 'E', rgb: [22, 163, 74] },
+    { name: 'SE', rgb: [163, 190, 20] },
+    { name: 'S', rgb: [250, 204, 21] },
+    { name: 'SW', rgb: [249, 115, 22] },
+    { name: 'W', rgb: [220, 38, 38] },
+    { name: 'NW', rgb: [147, 51, 234] }
+  ];
+  const WORLD_M = 2 * Math.PI * 6378137;
+  let demInfoPromise = null;
+  const demCache = new Map();
+
+  const getDemInfo = () => {
+    demInfoPromise = demInfoPromise || fetch(TERRAIN_URL)
+      .then((r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
+      .catch((error) => { demInfoPromise = null; throw error; });
+    return demInfoPromise;
+  };
+  const makeCanvas = (w, h) => {
+    if (typeof OffscreenCanvas !== 'undefined') return new OffscreenCanvas(w, h);
+    const c = document.createElement('canvas');
+    c.width = w;
+    c.height = h;
+    return c;
+  };
+  const canvasToBlob = (c) => (c.convertToBlob
+    ? c.convertToBlob({ type: 'image/png' })
+    : new Promise((resolve, reject) => c.toBlob((b) => (b ? resolve(b) : reject(new Error('toBlob failed'))), 'image/png')));
+
+  // Colours one terrain tile: every pixel steeper than 30° gets the colour of the way it faces.
+  async function aspectFromDem(template, z, x, y) {
+    const url = template.replace('{z}', z).replace('{x}', x).replace('{y}', y);
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const bitmap = await createImageBitmap(await response.blob());
+    const W = bitmap.width;
+    const H = bitmap.height;
+    const canvas = makeCanvas(W, H);
+    const g = canvas.getContext('2d', { willReadFrequently: true });
+    g.drawImage(bitmap, 0, 0);
+    if (bitmap.close) bitmap.close();
+    const px = g.getImageData(0, 0, W, H).data;
+    const h = new Float32Array(W * H);
+    for (let i = 0; i < W * H; i++) h[i] = px[i * 4] * 256 + px[i * 4 + 1] + px[i * 4 + 2] / 256 - 32768;
+
+    const out = g.createImageData(W, H);
+    const o = out.data;
+    const tanSteep = Math.tan(STEEP_DEG * RAD);
+    const n = 2 ** z;
+    for (let j = 0; j < H; j++) {
+      const lat = Math.atan(Math.sinh(Math.PI * (1 - 2 * ((y + (j + 0.5) / H) / n))));
+      const cell = (WORLD_M * Math.cos(lat)) / (W * n); // metres per pixel at this row
+      const ju = Math.max(0, j - 1);
+      const jd = Math.min(H - 1, j + 1);
+      const up = ju * W;
+      const mid = j * W;
+      const down = jd * W;
+      const rows = (jd - ju) * cell; // shorter at the tile's top and bottom edges
+      for (let i = 0; i < W; i++) {
+        const l = Math.max(0, i - 1);
+        const r = Math.min(W - 1, i + 1);
+        // Horn's method: east and north gradients from the 8 neighbours.
+        const east = ((h[up + r] + 2 * h[mid + r] + h[down + r]) - (h[up + l] + 2 * h[mid + l] + h[down + l])) / (4 * (r - l) * cell);
+        const north = ((h[up + l] + 2 * h[up + i] + h[up + r]) - (h[down + l] + 2 * h[down + i] + h[down + r])) / (4 * rows);
+        if (east * east + north * north < tanSteep * tanSteep) continue;
+        const facing = (Math.atan2(-east, -north) / RAD + 360) % 360; // the way the slope faces, clockwise from north
+        const c = ASPECTS[Math.round(facing / 45) % 8].rgb;
+        const k = (mid + i) * 4;
+        o[k] = c[0];
+        o[k + 1] = c[1];
+        o[k + 2] = c[2];
+        o[k + 3] = 255;
+      }
+    }
+    g.putImageData(out, 0, 0);
+    return canvas;
+  }
+
+  async function aspectTile(z, x, y) {
+    const info = await getDemInfo();
+    const template = info && Array.isArray(info.tiles) && info.tiles[0];
+    if (typeof template !== 'string') throw new Error('No terrain tiles');
+    const maxzoom = Number.isFinite(info.maxzoom) ? info.maxzoom : 14;
+    const dz = Math.min(8, Math.max(0, z - maxzoom)); // past the terrain's detail, enlarge its tile
+    const pz = z - dz;
+    const px = x >> dz;
+    const py = y >> dz;
+    const key = `${pz}/${px}/${py}`;
+    if (!demCache.has(key)) {
+      demCache.set(key, aspectFromDem(template, pz, px, py).catch((error) => { demCache.delete(key); throw error; }));
+      if (demCache.size > 24) demCache.delete(demCache.keys().next().value);
+    }
+    const source = await demCache.get(key);
+    if (!dz) return source;
+    const part = source.width / 2 ** dz;
+    const out = makeCanvas(512, 512);
+    const g = out.getContext('2d');
+    g.imageSmoothingEnabled = false;
+    g.drawImage(source, (x - (px << dz)) * part, (y - (py << dz)) * part, part, part, 0, 0, 512, 512);
+    return out;
+  }
+
+  maplibregl.addProtocol('trente-aspect', async (params) => {
+    const m = /^trente-aspect:\/\/(\d+)\/(\d+)\/(\d+)$/.exec(params.url);
+    if (!m) throw new Error('Bad tile address');
+    const canvas = await aspectTile(Number(m[1]), Number(m[2]), Number(m[3]));
+    const blob = await canvasToBlob(canvas);
+    return { data: await blob.arrayBuffer() };
+  });
+
   let map;
   try {
     map = new maplibregl.Map({
@@ -128,14 +265,16 @@
           photo: { type: 'raster', tiles: [wmts('ch.swisstopo.swissimage', 'jpeg')], tileSize: 256, maxzoom: 20, attribution: SWISSTOPO },
           winter: { type: 'raster', tiles: [wmts('ch.swisstopo.pixelkarte-farbe-winter', 'jpeg')], tileSize: 256, maxzoom: 17, attribution: SWISSTOPO },
           slope: { type: 'raster', tiles: [wmts('ch.swisstopo.hangneigung-ueber_30', 'png')], tileSize: 256, maxzoom: 17, attribution: SWISSTOPO },
+          aspect: { type: 'raster', tiles: ['trente-aspect://{z}/{x}/{y}'], tileSize: 512, minzoom: 9, maxzoom: 15 },
           tours: { type: 'raster', tiles: [wmts('ch.swisstopo-karto.skitouren', 'png')], tileSize: 256, maxzoom: 17, attribution: SWISSTOPO },
-          terrain: { type: 'raster-dem', url: 'https://tiles.mapterhorn.com/tilejson.json', encoding: 'terrarium', tileSize: 512 }
+          terrain: { type: 'raster-dem', url: TERRAIN_URL, encoding: 'terrarium', tileSize: 512 }
         },
         layers: [
           { id: 'background', type: 'background', paint: { 'background-color': '#dfe7ef' } },
           { id: 'photo', type: 'raster', source: 'photo' },
           { id: 'winter', type: 'raster', source: 'winter', layout: { visibility: 'none' } },
-          { id: 'slope', type: 'raster', source: 'slope', paint: { 'raster-opacity': 0.6 } },
+          { id: 'slope', type: 'raster', source: 'slope', paint: { 'raster-opacity': slopeOpacity(DEFAULT_STRENGTH) } },
+          { id: 'aspect', type: 'raster', source: 'aspect', layout: { visibility: 'none' }, paint: { 'raster-opacity': slopeOpacity(DEFAULT_STRENGTH), 'raster-resampling': 'nearest', 'raster-fade-duration': 0 } },
           { id: 'tours', type: 'raster', source: 'tours', layout: { visibility: 'none' } }
         ],
         terrain: { source: 'terrain', exaggeration: 1 },
@@ -155,6 +294,26 @@
   }
 
   map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), 'top-right');
+  const geolocate = new maplibregl.GeolocateControl({
+    positionOptions: { enableHighAccuracy: true, timeout: 15000 },
+    trackUserLocation: true,
+    showAccuracyCircle: true,
+    fitBoundsOptions: { maxZoom: 15 }
+  });
+  map.addControl(geolocate, 'top-right');
+  // On a phone, fold the tools away so your position isn't hidden behind them.
+  geolocate.on('trackuserlocationstart', () => {
+    if (narrowScreen.matches && !bodyEl.hidden) setPanelOpen(false);
+  });
+  geolocate.on('error', (e) => {
+    const denied = e && e.code === 1;
+    const box = $('notice');
+    box.textContent = denied
+      ? 'Location is switched off for this site. Allow it in Settings › Privacy › Location Services › Safari Websites.'
+      : "Couldn't find your location. Try again outside, away from buildings.";
+    box.hidden = false;
+    setTimeout(() => { box.hidden = true; }, 9000);
+  });
   map.addControl(new maplibregl.AttributionControl({ compact: true }), 'top-right');
   map.addControl(new maplibregl.ScaleControl({ unit: 'metric' }), 'top-right');
 
@@ -191,14 +350,75 @@
       map.setLayoutProperty('photo', 'visibility', winter ? 'none' : 'visible');
       map.setLayoutProperty('winter', 'visibility', winter ? 'visible' : 'none');
       map.setLayoutProperty('slope', 'visibility', $('slope').checked ? 'visible' : 'none');
+      map.setLayoutProperty('aspect', 'visibility', $('aspect').checked ? 'visible' : 'none');
       map.setLayoutProperty('tours', 'visibility', $('tours').checked ? 'visible' : 'none');
       map.setLayoutProperty('c2c-pins', 'visibility', $('c2c').checked ? 'visible' : 'none');
     } catch (error) {
       // The style isn't ready yet; applyLayers runs again on load.
     }
   };
+  // Steepness and direction are two ways of colouring the same slopes, so only one shows at a time.
+  function syncSlopeControls() {
+    const aspectOn = $('aspect').checked;
+    $('aspect-note').hidden = !aspectOn;
+    $('key-steep').hidden = aspectOn;
+    $('key-aspect').hidden = !aspectOn;
+    $('strength').disabled = !aspectOn && !$('slope').checked;
+  }
+  $('slope').addEventListener('change', () => {
+    if ($('slope').checked) $('aspect').checked = false;
+    syncSlopeControls();
+    applyLayers();
+  });
+  $('aspect').addEventListener('change', () => {
+    if ($('aspect').checked) $('slope').checked = false;
+    syncSlopeControls();
+    applyLayers();
+  });
+  $('strength').addEventListener('input', () => {
+    const opacity = slopeOpacity(Number($('strength').value));
+    try {
+      map.setPaintProperty('slope', 'raster-opacity', opacity);
+      map.setPaintProperty('aspect', 'raster-opacity', opacity);
+    } catch (error) {
+      // Style not ready; the default strength is already set.
+    }
+  });
+
+  // Compass key for the direction colours.
+  (function drawAspectKey() {
+    const NS = 'http://www.w3.org/2000/svg';
+    const svg = document.createElementNS(NS, 'svg');
+    svg.setAttribute('viewBox', '-60 -60 120 120');
+    svg.setAttribute('class', 'compass');
+    svg.setAttribute('role', 'img');
+    svg.setAttribute('aria-label', 'Direction colours: ' + ASPECTS.map((a) => a.name).join(', '));
+    const pointAt = (deg, r) => [r * Math.sin(deg * RAD), -r * Math.cos(deg * RAD)];
+    ASPECTS.forEach((a, k) => {
+      const [x1, y1] = pointAt(k * 45 - 22.5, 38);
+      const [x2, y2] = pointAt(k * 45 + 22.5, 38);
+      const wedge = document.createElementNS(NS, 'path');
+      wedge.setAttribute('d', `M0 0L${x1.toFixed(2)} ${y1.toFixed(2)}A38 38 0 0 1 ${x2.toFixed(2)} ${y2.toFixed(2)}Z`);
+      wedge.setAttribute('fill', `rgb(${a.rgb.join(',')})`);
+      wedge.setAttribute('stroke', '#ffffff');
+      wedge.setAttribute('stroke-width', '1.5');
+      svg.appendChild(wedge);
+      const [lx, ly] = pointAt(k * 45, 50);
+      const label = document.createElementNS(NS, 'text');
+      label.setAttribute('x', lx.toFixed(2));
+      label.setAttribute('y', ly.toFixed(2));
+      label.setAttribute('text-anchor', 'middle');
+      label.setAttribute('dominant-baseline', 'central');
+      label.textContent = a.name;
+      svg.appendChild(label);
+    });
+    const caption = document.createElement('p');
+    caption.textContent = 'The colour shows which way a slope faces. A north-facing slope looks out towards the north.';
+    $('key-aspect').append(svg, caption);
+  })();
+  syncSlopeControls();
+
   $('winter').addEventListener('change', applyLayers);
-  $('slope').addEventListener('change', applyLayers);
   $('tours').addEventListener('change', applyLayers);
 
   // Distances and heights
@@ -455,7 +675,7 @@
     map.addLayer({ id: 'route-points', type: 'circle', source: 'route', filter: ['==', ['get', 'kind'], 'point'], paint: { 'circle-radius': 5.5, 'circle-color': '#ffffff', 'circle-stroke-color': NIGHT, 'circle-stroke-width': 2.5 } });
     map.addLayer({ id: 'route-steepest', type: 'circle', source: 'route', filter: ['==', ['get', 'kind'], 'steepest'], paint: { 'circle-radius': 8, 'circle-color': GLACIER, 'circle-stroke-color': NIGHT, 'circle-stroke-width': 2.5 } });
     map.addSource('c2c', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
-    map.addLayer({ id: 'c2c-pins', type: 'circle', source: 'c2c', layout: { visibility: 'none' }, paint: { 'circle-radius': 7, 'circle-color': NIGHT, 'circle-stroke-color': '#ffffff', 'circle-stroke-width': 2.5 } });
+    map.addLayer({ id: 'c2c-pins', type: 'circle', source: 'c2c', layout: { visibility: 'none' }, paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 9, 3.5, 12, 5.5, 14, 7], 'circle-color': NIGHT, 'circle-stroke-color': '#ffffff', 'circle-stroke-width': ['interpolate', ['linear'], ['zoom'], 9, 1.5, 13, 2.5] } });
     applyLayers();
     ready = true;
     drawBtn.disabled = false;
@@ -499,145 +719,96 @@
     setTimeout(() => { noticeEl.hidden = true; }, 8000);
   });
 
-  // Community routes from Camptocamp (CC BY-SA 3.0). Everything the API sends is
-  // treated as untrusted text: it is only ever shown with textContent.
+  // Community routes from Camptocamp (CC BY-SA 3.0). Camptocamp only lets its own
+  // website load routes in a visitor's browser, so a weekly GitHub job
+  // (fetch-routes.mjs) saves them into data/ on this site, and we read those files.
+  // Everything in them came from other people, so it is only ever shown as text.
 
-  const C2C_API = 'https://api.camptocamp.org';
   const C2C_SITE = 'https://www.camptocamp.org';
-  const C2C_MIN_ZOOM = 11;
-  const C2C_LIMIT = 100;
-  const MERC_R = 6378137;
+  const ROUTES_URL = 'data/routes.json';
+  const LINES_URL = 'data/lines.json';
   const c2cStatusEl = $('c2c-status');
-  let c2cTimer = null;
-  let c2cAbort = null;
+  const C2C_HINT = 'Ski tours written up by Camptocamp members. Switch on to see them.';
   let c2cFeatures = [];
+  let c2cUpdated = '';
+  let routesPromise = null;
+  let linesPromise = null;
 
-  const fromMercator = (x, y) => [
-    (x / MERC_R) / RAD,
-    (2 * Math.atan(Math.exp(y / MERC_R)) - Math.PI / 2) / RAD
-  ];
-  const toMercator = (lng, lat) => {
-    const clamped = Math.max(-85, Math.min(85, lat));
-    return [MERC_R * lng * RAD, MERC_R * Math.log(Math.tan(Math.PI / 4 + (clamped * RAD) / 2))];
-  };
   const isPlace = (p) => Array.isArray(p) && Number.isFinite(p[0]) && Number.isFinite(p[1]);
-  const parseGeom = (text) => {
-    try { return JSON.parse(text); } catch (error) { return null; }
-  };
   const escapeXml = (text) =>
     String(text).replace(/[<>&"']/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&apos;' }[c]));
+  const text = (v, n = 12) => (v === undefined || v === null ? '' : String(v).slice(0, n));
 
-  function routeTitle(doc) {
-    const locales = Array.isArray(doc.locales) ? doc.locales : [];
-    const pick = ['en', 'fr', 'de', 'it', 'es'].map((l) => locales.find((x) => x && x.lang === l)).find(Boolean) || locales[0];
-    if (!pick) return 'Untitled route';
-    const title = String(pick.title || '').trim();
-    const prefix = String(pick.title_prefix || '').trim();
-    return (prefix && title ? `${prefix}: ${title}` : prefix || title || 'Untitled route').slice(0, 140);
-  }
-
-  function routeFeature(doc) {
-    const id = Number(doc && doc.document_id);
-    const geometry = doc && doc.geometry;
-    if (!Number.isInteger(id) || id <= 0 || !geometry || typeof geometry.geom !== 'string') return null;
-    const point = parseGeom(geometry.geom);
-    if (!point || point.type !== 'Point' || !isPlace(point.coordinates)) return null;
-    const text = (v) => (v === undefined || v === null ? '' : String(v).slice(0, 12));
+  function routeFeature(r) {
+    const id = Number(r && r.id);
+    if (!Number.isInteger(id) || id <= 0 || !isPlace([r.lng, r.lat])) return null;
     return {
       type: 'Feature',
       properties: {
         id,
-        title: routeTitle(doc),
-        ski: text(doc.ski_rating),
-        exposure: text(doc.ski_exposition),
-        overall: text(doc.labande_global_rating),
-        up: Number.isFinite(doc.height_diff_up) ? doc.height_diff_up : '',
-        max: Number.isFinite(doc.elevation_max) ? doc.elevation_max : '',
-        hasLine: geometry.has_geom_detail === true
+        title: text(r.title, 140) || 'Untitled route',
+        ski: text(r.ski),
+        exposure: text(r.exposure),
+        overall: text(r.overall),
+        up: Number.isFinite(r.up) ? r.up : '',
+        max: Number.isFinite(r.max) ? r.max : '',
+        hasLine: r.line === true
       },
-      geometry: { type: 'Point', coordinates: fromMercator(point.coordinates[0], point.coordinates[1]) }
+      geometry: { type: 'Point', coordinates: [r.lng, r.lat] }
     };
   }
 
-  const setC2cStatus = (text) => { c2cStatusEl.textContent = text; };
-  const emptyC2c = () => {
-    c2cFeatures = [];
+  const setC2cStatus = (message) => { c2cStatusEl.textContent = message; };
+  const showC2c = (features) => {
+    c2cFeatures = features;
     const source = map.getSource('c2c');
-    if (source) source.setData({ type: 'FeatureCollection', features: [] });
+    if (source) source.setData({ type: 'FeatureCollection', features });
   };
+
+  // Files are fetched once per visit, and fetched again after a failure.
+  async function getFile(url) {
+    const response = await fetch(url, { cache: 'no-cache' });
+    if (response.status === 404) {
+      const error = new Error('missing');
+      error.missing = true;
+      throw error;
+    }
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    return response.json();
+  }
 
   async function loadCommunityRoutes() {
     if (!ready || !$('c2c').checked) return;
-    if (c2cAbort) c2cAbort.abort();
-    if (map.getZoom() < C2C_MIN_ZOOM) {
-      emptyC2c();
-      setC2cStatus('Zoom in to see community routes.');
-      return;
-    }
-    const bounds = map.getBounds();
-    const [x1, y1] = toMercator(bounds.getWest(), bounds.getSouth());
-    const [x2, y2] = toMercator(bounds.getEast(), bounds.getNorth());
-    const url = `${C2C_API}/routes?act=skitouring&bbox=${[x1, y1, x2, y2].map(Math.round).join(',')}&pl=en&limit=${C2C_LIMIT}`;
-    const controller = new AbortController();
-    c2cAbort = controller;
     setC2cStatus('Loading community routes…');
+    routesPromise = routesPromise || getFile(ROUTES_URL);
     try {
-      const response = await fetch(url, { signal: controller.signal });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const data = await response.json();
-      const docs = Array.isArray(data && data.documents) ? data.documents : [];
-      const features = docs.map(routeFeature).filter(Boolean);
-      c2cFeatures = features;
-      map.getSource('c2c').setData({ type: 'FeatureCollection', features });
-      const total = Number.isFinite(data.total) ? data.total : features.length;
-      if (!features.length) setC2cStatus('No community routes in view.');
-      else if (total > features.length) setC2cStatus(`Showing ${features.length} of ${total} routes here. Zoom in to see the rest.`);
-      else setC2cStatus(`${features.length} community route${features.length === 1 ? '' : 's'} in view. Tap a dot.`);
+      const data = await routesPromise;
+      if (!$('c2c').checked) return;
+      const features = (Array.isArray(data && data.routes) ? data.routes : []).map(routeFeature).filter(Boolean);
+      c2cUpdated = /^\d{4}-\d{2}-\d{2}$/.test(String(data.updated)) ? data.updated : '';
+      showC2c(features);
+      const when = c2cUpdated ? ` Updated ${new Date(`${c2cUpdated}T12:00:00Z`).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}.` : '';
+      setC2cStatus(features.length
+        ? `${features.length} community routes around Verbier. Tap a dot.${when}`
+        : 'No community routes have been downloaded yet.');
     } catch (error) {
-      if (error && error.name === 'AbortError') return;
-      emptyC2c();
-      setC2cStatus("Couldn't load community routes. Check your connection and try again.");
+      routesPromise = null;
+      showC2c([]);
+      setC2cStatus(error && error.missing
+        ? "Community routes haven't been downloaded to this site yet."
+        : "Couldn't load community routes. Check your connection and try again.");
     }
-  }
-
-  const scheduleCommunityRoutes = () => {
-    clearTimeout(c2cTimer);
-    c2cTimer = setTimeout(loadCommunityRoutes, 450);
-  };
-
-  // Thin a detailed line to a few hundred points so the height lookups stay quick.
-  function thinLine(line) {
-    let length = 0;
-    for (let i = 1; i < line.length; i++) length += distance(line[i - 1], line[i]);
-    const step = Math.max(25, length / 300);
-    const kept = [line[0]];
-    let since = 0;
-    for (let i = 1; i < line.length; i++) {
-      since += distance(line[i - 1], line[i]);
-      if (since >= step || i === line.length - 1) {
-        kept.push(line[i]);
-        since = 0;
-      }
-    }
-    return kept;
   }
 
   async function loadRouteLine(props, button) {
     button.disabled = true;
     button.textContent = 'Loading…';
+    linesPromise = linesPromise || getFile(LINES_URL);
     try {
-      const response = await fetch(`${C2C_API}/routes/${props.id}`);
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const doc = await response.json();
-      const detail = doc && doc.geometry && typeof doc.geometry.geom_detail === 'string' ? parseGeom(doc.geometry.geom_detail) : null;
-      let lines = [];
-      if (detail && detail.type === 'LineString') lines = [detail.coordinates];
-      else if (detail && detail.type === 'MultiLineString') lines = detail.coordinates;
-      const line = [].concat(...(Array.isArray(lines) ? lines : []))
-        .filter(isPlace)
-        .map((c) => fromMercator(c[0], c[1]));
-      if (line.length < 2) throw new Error('no line');
-      const route = thinLine(line);
+      const lines = await linesPromise;
+      const raw = lines && Object.prototype.hasOwnProperty.call(lines, String(props.id)) ? lines[String(props.id)] : null;
+      const route = (Array.isArray(raw) ? raw : []).filter(isPlace).map((p) => [p[0], p[1]]);
+      if (route.length < 2) throw new Error('no line');
       if (drawing) setDrawing(false);
       points.length = 0;
       segments.length = 0;
@@ -651,6 +822,7 @@
       popup.remove();
       render();
     } catch (error) {
+      if (!(error && error.message === 'no line')) linesPromise = null;
       button.disabled = false;
       button.textContent = 'Load line';
       setC2cStatus("Couldn't load that route's line. Try again, or open it on Camptocamp.");
@@ -748,15 +920,13 @@
     if (drawing || !$('c2c').checked) return;
     map.getCanvas().style.cursor = nearestPin(e.point) ? 'pointer' : '';
   });
-  map.on('moveend', scheduleCommunityRoutes);
   $('c2c').addEventListener('change', () => {
     applyLayers();
     if ($('c2c').checked) loadCommunityRoutes();
     else {
-      if (c2cAbort) c2cAbort.abort();
       popup.remove();
-      emptyC2c();
-      setC2cStatus('Ski tours written up by Camptocamp members. Switch on and zoom in to see them.');
+      showC2c([]);
+      setC2cStatus(C2C_HINT);
     }
   });
 
