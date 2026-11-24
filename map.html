@@ -70,10 +70,15 @@
       <span>Ski touring routes</span>
       <input type="checkbox" role="switch" id="tours">
     </label>
+    <label class="switch-row">
+      <span>Community routes</span>
+      <input type="checkbox" role="switch" id="c2c">
+    </label>
+    <p class="stats-note" id="c2c-status">Ski tours written up by Camptocamp members. Switch on and zoom in to see them.</p>
 
     <hr>
     <p class="note">Planning aid only, not avalanche advice. Read the <a href="https://whiterisk.ch/en/conditions" target="_blank" rel="noopener">SLF avalanche bulletin</a> before every tour.</p>
-    <p class="credits">Photos, maps, slopes and routes © swisstopo. Terrain © Mapterhorn.</p>
+    <p class="credits">Photos, maps, slopes and routes © swisstopo. Terrain © Mapterhorn. Community routes by <a href="https://www.camptocamp.org" target="_blank" rel="noopener">Camptocamp.org</a> contributors, <a href="https://creativecommons.org/licenses/by-sa/3.0/" target="_blank" rel="noopener">CC BY-SA 3.0</a>.</p>
   </div>
 </section>
 
@@ -176,6 +181,7 @@
   const segments = [];  // height samples for the line between each pair of points
   let lastProfile = [];
   let lastMeasure = null;
+  let routeSource = null; // set while the route on screen is a Camptocamp line, so we credit it
 
   // Layers
 
@@ -186,6 +192,7 @@
       map.setLayoutProperty('winter', 'visibility', winter ? 'visible' : 'none');
       map.setLayoutProperty('slope', 'visibility', $('slope').checked ? 'visible' : 'none');
       map.setLayoutProperty('tours', 'visibility', $('tours').checked ? 'visible' : 'none');
+      map.setLayoutProperty('c2c-pins', 'visibility', $('c2c').checked ? 'visible' : 'none');
     } catch (error) {
       // The style isn't ready yet; applyLayers runs again on load.
     }
@@ -290,6 +297,7 @@
     if (points.length === 1) return 'Tap Add points to keep drawing.';
     if (!m.complete) return "Heights for part of your route haven't loaded. Zoom out so the whole route is on screen.";
     if (drawing) return 'Keep tapping to add points, then tap Done.';
+    if (routeSource) return `Camptocamp route: ${routeSource.title}. Credit: its authors, CC BY-SA 3.0.`;
     return 'The turquoise dot marks the steepest part of your line.';
   }
 
@@ -359,6 +367,7 @@
   }
 
   function undo() {
+    routeSource = null;
     points.pop();
     segments.length = Math.max(0, points.length - 1);
     render();
@@ -445,6 +454,8 @@
     map.addLayer({ id: 'route-line', type: 'line', source: 'route', filter: isLine, layout: lineLayout, paint: { 'line-color': '#ffffff', 'line-width': 3.5 } });
     map.addLayer({ id: 'route-points', type: 'circle', source: 'route', filter: ['==', ['get', 'kind'], 'point'], paint: { 'circle-radius': 5.5, 'circle-color': '#ffffff', 'circle-stroke-color': NIGHT, 'circle-stroke-width': 2.5 } });
     map.addLayer({ id: 'route-steepest', type: 'circle', source: 'route', filter: ['==', ['get', 'kind'], 'steepest'], paint: { 'circle-radius': 8, 'circle-color': GLACIER, 'circle-stroke-color': NIGHT, 'circle-stroke-width': 2.5 } });
+    map.addSource('c2c', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+    map.addLayer({ id: 'c2c-pins', type: 'circle', source: 'c2c', layout: { visibility: 'none' }, paint: { 'circle-radius': 7, 'circle-color': NIGHT, 'circle-stroke-color': '#ffffff', 'circle-stroke-width': 2.5 } });
     applyLayers();
     ready = true;
     drawBtn.disabled = false;
@@ -453,6 +464,7 @@
 
   map.on('click', (e) => {
     if (!drawing) return;
+    routeSource = null;
     const p = [e.lngLat.lng, e.lngLat.lat];
     if (points.length) segments.push(sampleSegment(points[points.length - 1], p));
     points.push(p);
@@ -487,6 +499,267 @@
     setTimeout(() => { noticeEl.hidden = true; }, 8000);
   });
 
+  // Community routes from Camptocamp (CC BY-SA 3.0). Everything the API sends is
+  // treated as untrusted text: it is only ever shown with textContent.
+
+  const C2C_API = 'https://api.camptocamp.org';
+  const C2C_SITE = 'https://www.camptocamp.org';
+  const C2C_MIN_ZOOM = 11;
+  const C2C_LIMIT = 100;
+  const MERC_R = 6378137;
+  const c2cStatusEl = $('c2c-status');
+  let c2cTimer = null;
+  let c2cAbort = null;
+  let c2cFeatures = [];
+
+  const fromMercator = (x, y) => [
+    (x / MERC_R) / RAD,
+    (2 * Math.atan(Math.exp(y / MERC_R)) - Math.PI / 2) / RAD
+  ];
+  const toMercator = (lng, lat) => {
+    const clamped = Math.max(-85, Math.min(85, lat));
+    return [MERC_R * lng * RAD, MERC_R * Math.log(Math.tan(Math.PI / 4 + (clamped * RAD) / 2))];
+  };
+  const isPlace = (p) => Array.isArray(p) && Number.isFinite(p[0]) && Number.isFinite(p[1]);
+  const parseGeom = (text) => {
+    try { return JSON.parse(text); } catch (error) { return null; }
+  };
+  const escapeXml = (text) =>
+    String(text).replace(/[<>&"']/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&apos;' }[c]));
+
+  function routeTitle(doc) {
+    const locales = Array.isArray(doc.locales) ? doc.locales : [];
+    const pick = ['en', 'fr', 'de', 'it', 'es'].map((l) => locales.find((x) => x && x.lang === l)).find(Boolean) || locales[0];
+    if (!pick) return 'Untitled route';
+    const title = String(pick.title || '').trim();
+    const prefix = String(pick.title_prefix || '').trim();
+    return (prefix && title ? `${prefix}: ${title}` : prefix || title || 'Untitled route').slice(0, 140);
+  }
+
+  function routeFeature(doc) {
+    const id = Number(doc && doc.document_id);
+    const geometry = doc && doc.geometry;
+    if (!Number.isInteger(id) || id <= 0 || !geometry || typeof geometry.geom !== 'string') return null;
+    const point = parseGeom(geometry.geom);
+    if (!point || point.type !== 'Point' || !isPlace(point.coordinates)) return null;
+    const text = (v) => (v === undefined || v === null ? '' : String(v).slice(0, 12));
+    return {
+      type: 'Feature',
+      properties: {
+        id,
+        title: routeTitle(doc),
+        ski: text(doc.ski_rating),
+        exposure: text(doc.ski_exposition),
+        overall: text(doc.labande_global_rating),
+        up: Number.isFinite(doc.height_diff_up) ? doc.height_diff_up : '',
+        max: Number.isFinite(doc.elevation_max) ? doc.elevation_max : '',
+        hasLine: geometry.has_geom_detail === true
+      },
+      geometry: { type: 'Point', coordinates: fromMercator(point.coordinates[0], point.coordinates[1]) }
+    };
+  }
+
+  const setC2cStatus = (text) => { c2cStatusEl.textContent = text; };
+  const emptyC2c = () => {
+    c2cFeatures = [];
+    const source = map.getSource('c2c');
+    if (source) source.setData({ type: 'FeatureCollection', features: [] });
+  };
+
+  async function loadCommunityRoutes() {
+    if (!ready || !$('c2c').checked) return;
+    if (c2cAbort) c2cAbort.abort();
+    if (map.getZoom() < C2C_MIN_ZOOM) {
+      emptyC2c();
+      setC2cStatus('Zoom in to see community routes.');
+      return;
+    }
+    const bounds = map.getBounds();
+    const [x1, y1] = toMercator(bounds.getWest(), bounds.getSouth());
+    const [x2, y2] = toMercator(bounds.getEast(), bounds.getNorth());
+    const url = `${C2C_API}/routes?act=skitouring&bbox=${[x1, y1, x2, y2].map(Math.round).join(',')}&pl=en&limit=${C2C_LIMIT}`;
+    const controller = new AbortController();
+    c2cAbort = controller;
+    setC2cStatus('Loading community routes…');
+    try {
+      const response = await fetch(url, { signal: controller.signal });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const data = await response.json();
+      const docs = Array.isArray(data && data.documents) ? data.documents : [];
+      const features = docs.map(routeFeature).filter(Boolean);
+      c2cFeatures = features;
+      map.getSource('c2c').setData({ type: 'FeatureCollection', features });
+      const total = Number.isFinite(data.total) ? data.total : features.length;
+      if (!features.length) setC2cStatus('No community routes in view.');
+      else if (total > features.length) setC2cStatus(`Showing ${features.length} of ${total} routes here. Zoom in to see the rest.`);
+      else setC2cStatus(`${features.length} community route${features.length === 1 ? '' : 's'} in view. Tap a dot.`);
+    } catch (error) {
+      if (error && error.name === 'AbortError') return;
+      emptyC2c();
+      setC2cStatus("Couldn't load community routes. Check your connection and try again.");
+    }
+  }
+
+  const scheduleCommunityRoutes = () => {
+    clearTimeout(c2cTimer);
+    c2cTimer = setTimeout(loadCommunityRoutes, 450);
+  };
+
+  // Thin a detailed line to a few hundred points so the height lookups stay quick.
+  function thinLine(line) {
+    let length = 0;
+    for (let i = 1; i < line.length; i++) length += distance(line[i - 1], line[i]);
+    const step = Math.max(25, length / 300);
+    const kept = [line[0]];
+    let since = 0;
+    for (let i = 1; i < line.length; i++) {
+      since += distance(line[i - 1], line[i]);
+      if (since >= step || i === line.length - 1) {
+        kept.push(line[i]);
+        since = 0;
+      }
+    }
+    return kept;
+  }
+
+  async function loadRouteLine(props, button) {
+    button.disabled = true;
+    button.textContent = 'Loading…';
+    try {
+      const response = await fetch(`${C2C_API}/routes/${props.id}`);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const doc = await response.json();
+      const detail = doc && doc.geometry && typeof doc.geometry.geom_detail === 'string' ? parseGeom(doc.geometry.geom_detail) : null;
+      let lines = [];
+      if (detail && detail.type === 'LineString') lines = [detail.coordinates];
+      else if (detail && detail.type === 'MultiLineString') lines = detail.coordinates;
+      const line = [].concat(...(Array.isArray(lines) ? lines : []))
+        .filter(isPlace)
+        .map((c) => fromMercator(c[0], c[1]));
+      if (line.length < 2) throw new Error('no line');
+      const route = thinLine(line);
+      if (drawing) setDrawing(false);
+      points.length = 0;
+      segments.length = 0;
+      route.forEach((p, i) => {
+        if (i) segments.push(sampleSegment(route[i - 1], p));
+        points.push(p);
+      });
+      routeSource = { id: props.id, title: String(props.title || 'Untitled route') };
+      const box = route.reduce((b, p) => b.extend(p), new maplibregl.LngLatBounds(route[0], route[0]));
+      map.fitBounds(box, { padding: { top: 90, bottom: 60, left: narrowScreen.matches ? 30 : 460, right: 60 }, maxZoom: 15, duration: 800 });
+      popup.remove();
+      render();
+    } catch (error) {
+      button.disabled = false;
+      button.textContent = 'Load line';
+      setC2cStatus("Couldn't load that route's line. Try again, or open it on Camptocamp.");
+    }
+  }
+
+  const popup = new maplibregl.Popup({ maxWidth: '270px', focusAfterOpen: false, closeButton: true });
+
+  function showRoutePopup(feature, lngLat) {
+    const p = feature.properties;
+    const box = document.createElement('div');
+    box.className = 'c2c-pop';
+
+    const title = document.createElement('strong');
+    title.textContent = p.title;
+    box.appendChild(title);
+
+    const facts = [];
+    if (p.ski) facts.push(`Ski rating ${p.ski}`);
+    if (p.exposure) facts.push(`exposure ${p.exposure}`);
+    if (p.overall) facts.push(`overall ${p.overall}`);
+    const climb = [];
+    if (p.up !== '' && p.up !== undefined) climb.push(`${p.up} m up`);
+    if (p.max !== '' && p.max !== undefined) climb.push(`top ${p.max} m`);
+    [facts.join(', '), climb.join(', ')].filter(Boolean).forEach((line) => {
+      const row = document.createElement('p');
+      row.textContent = line;
+      box.appendChild(row);
+    });
+
+    const warn = document.createElement('p');
+    warn.className = 'c2c-warn';
+    warn.textContent = "Someone else's route, with their ratings. Conditions change daily. Read the SLF bulletin first.";
+    box.appendChild(warn);
+
+    const actions = document.createElement('div');
+    actions.className = 'c2c-actions';
+    if (p.hasLine === true || p.hasLine === 'true') {
+      const load = document.createElement('button');
+      load.type = 'button';
+      load.className = 'btn-tool';
+      load.textContent = 'Load line';
+      load.addEventListener('click', () => loadRouteLine(p, load));
+      actions.appendChild(load);
+    }
+    const read = document.createElement('a');
+    read.href = `${C2C_SITE}/routes/${Number(p.id)}`;
+    read.target = '_blank';
+    read.rel = 'noopener';
+    read.textContent = 'Full description';
+    actions.appendChild(read);
+    box.appendChild(actions);
+
+    const credit = document.createElement('p');
+    credit.className = 'c2c-credit';
+    const authors = document.createElement('a');
+    authors.href = `${C2C_SITE}/routes/history/${Number(p.id)}`;
+    authors.target = '_blank';
+    authors.rel = 'noopener';
+    authors.textContent = 'Camptocamp contributors';
+    credit.append('By ', authors, ', ');
+    const licence = document.createElement('a');
+    licence.href = 'https://creativecommons.org/licenses/by-sa/3.0/';
+    licence.target = '_blank';
+    licence.rel = 'noopener';
+    licence.textContent = 'CC BY-SA 3.0';
+    credit.appendChild(licence);
+    box.appendChild(credit);
+
+    popup.setLngLat(lngLat).setDOMContent(box).addTo(map);
+  }
+
+  // Fingers aren't precise, so a tap counts if it lands near a dot, not only on it.
+  // We measure on screen ourselves, because the map's own hit test can miss dots on steep 3D terrain.
+  const TAP_SLOP_PX = 22;
+  const nearestPin = (point) => {
+    let best = null;
+    let bestGap = TAP_SLOP_PX * TAP_SLOP_PX;
+    for (const f of c2cFeatures) {
+      const p = map.project(f.geometry.coordinates);
+      const gap = (p.x - point.x) ** 2 + (p.y - point.y) ** 2;
+      if (gap <= bestGap) {
+        best = f;
+        bestGap = gap;
+      }
+    }
+    return best;
+  };
+  map.on('click', (e) => {
+    if (drawing || !$('c2c').checked) return;
+    const pin = nearestPin(e.point);
+    if (pin) showRoutePopup(pin, pin.geometry.coordinates.slice());
+  });
+  map.on('mousemove', (e) => {
+    if (drawing || !$('c2c').checked) return;
+    map.getCanvas().style.cursor = nearestPin(e.point) ? 'pointer' : '';
+  });
+  map.on('moveend', scheduleCommunityRoutes);
+  $('c2c').addEventListener('change', () => {
+    applyLayers();
+    if ($('c2c').checked) loadCommunityRoutes();
+    else {
+      if (c2cAbort) c2cAbort.abort();
+      popup.remove();
+      emptyC2c();
+      setC2cStatus('Ski tours written up by Camptocamp members. Switch on and zoom in to see them.');
+    }
+  });
+
   // Buttons
 
   drawBtn.addEventListener('click', () => setDrawing(!drawing));
@@ -495,6 +768,7 @@
   miniUndoBtn.addEventListener('click', undo);
 
   clearBtn.addEventListener('click', () => {
+    routeSource = null;
     points.length = 0;
     segments.length = 0;
     render();
@@ -503,13 +777,16 @@
   gpxBtn.addEventListener('click', () => {
     if (lastProfile.length < 2) return;
     const day = new Date().toISOString().slice(0, 10);
-    const name = `Verbier route ${day}`;
+    const name = escapeXml(routeSource ? routeSource.title : `Verbier route ${day}`);
+    const credit = routeSource
+      ? `\n  <desc>Line from Camptocamp route ${Number(routeSource.id)}, CC BY-SA 3.0. Authors: ${C2C_SITE}/routes/history/${Number(routeSource.id)}</desc>`
+      : '';
     const trackPoints = lastProfile
       .map((s) => `      <trkpt lat="${s.p[1].toFixed(6)}" lon="${s.p[0].toFixed(6)}">${s.z === null ? '' : `<ele>${s.z.toFixed(1)}</ele>`}</trkpt>`)
       .join('\n');
     const gpx = `<?xml version="1.0" encoding="UTF-8"?>
 <gpx version="1.1" creator="Trente" xmlns="http://www.topografix.com/GPX/1/1">
-  <metadata><name>${name}</name><time>${new Date().toISOString()}</time></metadata>
+  <metadata><name>${name}</name>${credit}<time>${new Date().toISOString()}</time></metadata>
   <trk>
     <name>${name}</name>
     <trkseg>

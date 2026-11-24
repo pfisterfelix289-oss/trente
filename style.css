@@ -675,6 +675,64 @@ a:hover {
   text-align: center;
 }
 
+.credits a {
+  color: var(--ink);
+}
+
+/* Community route popup */
+
+.c2c-pop {
+  font-family: inherit;
+  color: var(--ink);
+}
+
+.c2c-pop strong {
+  display: block;
+  margin-right: 18px;
+  font-size: 1rem;
+  line-height: 1.3;
+}
+
+.c2c-pop p {
+  margin: 6px 0 0;
+  font-size: 0.9375rem;
+}
+
+.c2c-pop .c2c-warn,
+.c2c-pop .c2c-credit {
+  font-size: 0.8125rem;
+  color: var(--slate);
+}
+
+.c2c-pop a {
+  color: var(--ink);
+  font-weight: 700;
+}
+
+.c2c-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin-top: 10px;
+}
+
+.c2c-actions .btn-tool {
+  min-height: 40px;
+  padding: 0 14px;
+}
+
+.maplibregl-popup-content {
+  border-radius: 12px;
+}
+
+.maplibregl-popup-close-button {
+  width: 36px;
+  height: 36px;
+  font-size: 22px;
+  color: var(--ink);
+}
+
 /* MapLibre controls: keep clear of the iPhone notch and make them easier to tap */
 
 .maplibregl-ctrl-top-right {
