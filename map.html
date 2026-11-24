@@ -1,0 +1,526 @@
+<!DOCTYPE html>
+<html lang="en" class="map-html">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Verbier map | Trente</title>
+  <meta name="description" content="3D map of Verbier with slopes over 30°, ski touring routes, route profiles and GPX export.">
+  <meta name="theme-color" content="#0c2a4d">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230c2a4d'/%3E%3Cpath d='M6 24H26M6 24 23.3 14M16 24a10 10 0 0 0-1.34-5' fill='none' stroke='%232bc6d8' stroke-width='3' stroke-linecap='round'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Next:wght@400;700;800&display=swap">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/maplibre-gl@5.24.1/dist/maplibre-gl.css" integrity="sha384-uTttxo/aOKbdE5RlD/SPzSDoDmNvGlUYPjONi2MN/b7c9HPSvW07OIuyP7uL6jxK" crossorigin="anonymous">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body class="map-page">
+
+<div id="map" role="region" aria-label="3D map of Verbier"></div>
+
+<header class="map-bar">
+  <a class="back" href="index.html">← About</a>
+  <h1 class="map-brand">
+    <svg class="mark" viewBox="0 0 32 32" aria-hidden="true"><path d="M3 26H29M3 26 25.5 13M15 26a12 12 0 0 0-1.61-6" fill="none" stroke="currentColor" stroke-width="3.4" stroke-linecap="round"/></svg>
+    Trente
+  </h1>
+</header>
+
+<section class="panel" id="panel" aria-label="Map tools">
+  <div class="panel-head">
+    <p class="panel-title" id="panel-title">Map tools</p>
+    <button class="mini" id="mini-undo" type="button" hidden>Undo</button>
+    <button class="mini mini-done" id="mini-done" type="button" hidden>Done</button>
+    <button class="panel-toggle" id="panel-toggle" type="button" aria-expanded="true" aria-controls="panel-body">Hide</button>
+  </div>
+
+  <div class="panel-body" id="panel-body">
+    <div class="tools">
+      <button class="btn-tool btn-draw" id="draw" type="button" aria-pressed="false" disabled>Draw route</button>
+      <button class="btn-tool" id="undo" type="button" disabled>Undo</button>
+      <button class="btn-tool" id="clear" type="button" disabled>Clear</button>
+      <button class="btn-tool" id="gpx" type="button" disabled>GPX</button>
+    </div>
+    <p class="status" id="status" aria-live="polite">Loading the map…</p>
+    <p class="notice" id="notice" role="status" hidden></p>
+
+    <dl class="stats" id="stats" hidden>
+      <div><dt>Distance</dt><dd id="s-dist">–</dd></div>
+      <div><dt>Climb</dt><dd id="s-up">–</dd></div>
+      <div><dt>Descent</dt><dd id="s-down">–</dd></div>
+      <div><dt>Steepest</dt><dd id="s-steep">–</dd></div>
+    </dl>
+    <canvas class="profile" id="profile" role="img" aria-label="Elevation profile of your route" hidden></canvas>
+    <p class="stats-note" id="stats-note" hidden>Steepest measures your line, not the slope beside it.</p>
+
+    <hr>
+    <label class="switch-row">
+      <span>Slopes over 30°</span>
+      <input type="checkbox" role="switch" id="slope" checked>
+    </label>
+    <details class="key">
+      <summary>Colour key</summary>
+      <img src="https://api3.geo.admin.ch/static/images/legends/ch.swisstopo.hangneigung-ueber_30_en.png" alt="swisstopo colour key for the slope classes over 30°" loading="lazy">
+    </details>
+    <label class="switch-row">
+      <span>Ski touring routes</span>
+      <input type="checkbox" role="switch" id="tours">
+    </label>
+
+    <hr>
+    <p class="note">Planning aid only, not avalanche advice. Read the <a href="https://whiterisk.ch/en/conditions" target="_blank" rel="noopener">SLF avalanche bulletin</a> before every tour.</p>
+    <p class="credits">Photos, slopes and routes © swisstopo. Terrain © Mapterhorn.</p>
+  </div>
+</section>
+
+<div class="fallback" id="fallback" hidden></div>
+<noscript><div class="fallback">The map needs JavaScript switched on.</div></noscript>
+
+<script src="https://cdn.jsdelivr.net/npm/maplibre-gl@5.24.1/dist/maplibre-gl.js" integrity="sha384-nXMl9YiLoSG5KBPTFgvxVuIqQQcqIvo0bFrvoEaGJC6r7IibIzF1S36Zbf/sKBtL" crossorigin="anonymous"></script>
+<script>
+(() => {
+  'use strict';
+
+  const $ = (id) => document.getElementById(id);
+  const showFallback = (message) => {
+    const box = $('fallback');
+    box.textContent = message;
+    box.hidden = false;
+  };
+
+  if (typeof maplibregl === 'undefined') {
+    showFallback("The map couldn't load. Check your connection, then reload the page.");
+    return;
+  }
+
+  const NIGHT = '#0c2a4d';
+  const GLACIER = '#2bc6d8';
+  const STEP_M = 20;         // metres between height samples along the route
+  const MIN_STEP_M = 5;      // ignore shorter steps when finding the steepest part
+  const EARTH_RADIUS_M = 6371008.8;
+  const RAD = Math.PI / 180;
+  const SWISSTOPO = '<a href="https://www.swisstopo.admin.ch/en" target="_blank" rel="noopener">© swisstopo</a>';
+  const wmts = (layer, ext) =>
+    `https://wmts.geo.admin.ch/1.0.0/${layer}/default/current/3857/{z}/{x}/{y}.${ext}`;
+
+  let map;
+  try {
+    map = new maplibregl.Map({
+      container: 'map',
+      center: [7.262, 46.09],   // above Verbier, looking towards Mont Fort
+      zoom: 12.8,
+      pitch: 60,
+      bearing: 100,
+      maxPitch: 80,
+      attributionControl: false,
+      style: {
+        version: 8,
+        sources: {
+          photo: { type: 'raster', tiles: [wmts('ch.swisstopo.swissimage', 'jpeg')], tileSize: 256, maxzoom: 20, attribution: SWISSTOPO },
+          slope: { type: 'raster', tiles: [wmts('ch.swisstopo.hangneigung-ueber_30', 'png')], tileSize: 256, maxzoom: 17, attribution: SWISSTOPO },
+          tours: { type: 'raster', tiles: [wmts('ch.swisstopo-karto.skitouren', 'png')], tileSize: 256, maxzoom: 17, attribution: SWISSTOPO },
+          terrain: { type: 'raster-dem', url: 'https://tiles.mapterhorn.com/tilejson.json', encoding: 'terrarium', tileSize: 512 }
+        },
+        layers: [
+          { id: 'background', type: 'background', paint: { 'background-color': '#dfe7ef' } },
+          { id: 'photo', type: 'raster', source: 'photo' },
+          { id: 'slope', type: 'raster', source: 'slope', paint: { 'raster-opacity': 0.6 } },
+          { id: 'tours', type: 'raster', source: 'tours', layout: { visibility: 'none' } }
+        ],
+        terrain: { source: 'terrain', exaggeration: 1 },
+        sky: {
+          'sky-color': '#7fa9d6',
+          'horizon-color': '#dce8f3',
+          'fog-color': '#dce8f3',
+          'sky-horizon-blend': 0.6,
+          'horizon-fog-blend': 0.5,
+          'fog-ground-blend': 0.85
+        }
+      }
+    });
+  } catch (error) {
+    showFallback("This browser can't show the 3D map. Try the latest Safari, Chrome or Firefox.");
+    return;
+  }
+
+  map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), 'top-right');
+  map.addControl(new maplibregl.AttributionControl({ compact: true }), 'top-right');
+  map.addControl(new maplibregl.ScaleControl({ unit: 'metric' }), 'top-right');
+
+  const drawBtn = $('draw');
+  const undoBtn = $('undo');
+  const clearBtn = $('clear');
+  const gpxBtn = $('gpx');
+  const statusEl = $('status');
+  const noticeEl = $('notice');
+  const statsEl = $('stats');
+  const statsNoteEl = $('stats-note');
+  const profileEl = $('profile');
+  const panelEl = $('panel');
+  const bodyEl = $('panel-body');
+  const titleEl = $('panel-title');
+  const toggleBtn = $('panel-toggle');
+  const miniDoneBtn = $('mini-done');
+  const miniUndoBtn = $('mini-undo');
+  const narrowScreen = window.matchMedia('(max-width: 699px)');
+
+  let ready = false;
+  let drawing = false;
+  const points = [];    // the points you tapped, as [lng, lat]
+  const segments = [];  // height samples for the line between each pair of points
+  let lastProfile = [];
+  let lastMeasure = null;
+
+  // Layers
+
+  const applyLayers = () => {
+    try {
+      map.setLayoutProperty('slope', 'visibility', $('slope').checked ? 'visible' : 'none');
+      map.setLayoutProperty('tours', 'visibility', $('tours').checked ? 'visible' : 'none');
+    } catch (error) {
+      // The style isn't ready yet; applyLayers runs again on load.
+    }
+  };
+  $('slope').addEventListener('change', applyLayers);
+  $('tours').addEventListener('change', applyLayers);
+
+  // Distances and heights
+
+  function distance(a, b) {
+    const dLat = (b[1] - a[1]) * RAD;
+    const dLng = (b[0] - a[0]) * RAD;
+    const h = Math.sin(dLat / 2) ** 2 + Math.cos(a[1] * RAD) * Math.cos(b[1] * RAD) * Math.sin(dLng / 2) ** 2;
+    return 2 * EARTH_RADIUS_M * Math.asin(Math.min(1, Math.sqrt(h)));
+  }
+
+  // Height in metres above sea level, or null if that terrain hasn't loaded yet.
+  function heightAt(point) {
+    const z = map.queryTerrainElevation(point);
+    if (typeof z !== 'number' || !(z > 0)) return null;
+    const terrain = map.getTerrain();
+    return z / ((terrain && terrain.exaggeration) || 1);
+  }
+
+  function sampleSegment(a, b) {
+    const count = Math.max(1, Math.ceil(distance(a, b) / STEP_M));
+    const samples = [];
+    for (let i = 0; i <= count; i++) {
+      const t = i / count;
+      const p = [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+      samples.push({ p, z: heightAt(p) });
+    }
+    return samples;
+  }
+
+  function buildProfile() {
+    const profile = [];
+    let d = 0;
+    segments.forEach((segment, si) => {
+      segment.forEach((s, i) => {
+        if (si > 0 && i === 0) return; // same spot as the previous segment's last sample
+        if (profile.length) d += distance(profile[profile.length - 1].p, s.p);
+        profile.push({ p: s.p, z: s.z, d });
+      });
+    });
+    return profile;
+  }
+
+  function measure(profile) {
+    const result = {
+      dist: profile.length ? profile[profile.length - 1].d : 0,
+      up: 0,
+      down: 0,
+      steepest: null,
+      complete: profile.every((s) => s.z !== null)
+    };
+    for (let i = 1; i < profile.length; i++) {
+      const a = profile[i - 1];
+      const b = profile[i];
+      if (a.z === null || b.z === null) continue;
+      const dz = b.z - a.z;
+      const dx = b.d - a.d;
+      if (dz > 0) result.up += dz;
+      else result.down -= dz;
+      if (dx >= MIN_STEP_M) {
+        const deg = Math.atan(Math.abs(dz) / dx) / RAD;
+        if (!result.steepest || deg > result.steepest.deg) result.steepest = { deg, i };
+      }
+    }
+    return result;
+  }
+
+  const formatDistance = (m) => (m < 1000 ? `${Math.round(m)} m` : `${(m / 1000).toFixed(2)} km`);
+
+  function setStat(id, value, unit) {
+    const el = $(id);
+    el.textContent = value;
+    if (unit) {
+      const span = document.createElement('span');
+      span.className = 'unit';
+      span.textContent = unit;
+      el.appendChild(span);
+    }
+  }
+
+  // Short status for the panel's top bar while the panel is folded away.
+  function compactTitle(m) {
+    if (drawing && points.length === 0) return 'Tap where your route starts';
+    if (drawing && points.length === 1) return 'Tap the next point';
+    if (points.length > 1) return `${formatDistance(m.dist)}, ${Math.round(m.up)} m up`;
+    return 'Map tools';
+  }
+
+  // Drawing on the map and in the panel
+
+  function statusText(m) {
+    if (!ready) return 'Loading the map…';
+    if (drawing && points.length === 0) return 'Tap the map where your route starts.';
+    if (drawing && points.length === 1) return 'Tap the next point.';
+    if (points.length === 0) return 'Tap Draw route, then tap the map to add points.';
+    if (points.length === 1) return 'Tap Add points to keep drawing.';
+    if (!m.complete) return "Heights for part of your route haven't loaded. Zoom out so the whole route is on screen.";
+    if (drawing) return 'Keep tapping to add points, then tap Done.';
+    return 'The turquoise dot marks the steepest part of your line.';
+  }
+
+  function render() {
+    const profile = buildProfile();
+    const m = measure(profile);
+    lastProfile = profile;
+    lastMeasure = m;
+
+    const features = [];
+    if (points.length > 1) {
+      features.push({ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: points.slice() } });
+    }
+    for (const p of points) {
+      features.push({ type: 'Feature', properties: { kind: 'point' }, geometry: { type: 'Point', coordinates: p } });
+    }
+    if (m.steepest) {
+      const a = profile[m.steepest.i - 1].p;
+      const b = profile[m.steepest.i].p;
+      features.push({ type: 'Feature', properties: { kind: 'steepest' }, geometry: { type: 'Point', coordinates: [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2] } });
+    }
+    const source = map.getSource('route');
+    if (source) source.setData({ type: 'FeatureCollection', features });
+
+    undoBtn.disabled = points.length === 0;
+    clearBtn.disabled = points.length === 0;
+    gpxBtn.disabled = points.length < 2;
+    drawBtn.setAttribute('aria-pressed', String(drawing));
+    drawBtn.textContent = drawing ? 'Done' : points.length ? 'Add points' : 'Draw route';
+
+    const hasRoute = points.length > 1;
+    statsEl.hidden = !hasRoute;
+    statsNoteEl.hidden = !hasRoute;
+    profileEl.hidden = !hasRoute;
+    if (hasRoute) {
+      if (m.dist < 1000) setStat('s-dist', String(Math.round(m.dist)), 'm');
+      else setStat('s-dist', (m.dist / 1000).toFixed(2), 'km');
+      setStat('s-up', String(Math.round(m.up)), 'm');
+      setStat('s-down', String(Math.round(m.down)), 'm');
+      setStat('s-steep', m.steepest ? `${Math.round(m.steepest.deg)}°` : '–');
+      drawProfile(profile, m);
+    }
+    statusEl.textContent = statusText(m);
+
+    const folded = bodyEl.hidden;
+    titleEl.textContent = folded ? compactTitle(m) : 'Map tools';
+    miniDoneBtn.hidden = !(folded && drawing);
+    miniUndoBtn.hidden = !(folded && drawing && points.length > 0);
+  }
+
+  function setPanelOpen(open) {
+    toggleBtn.setAttribute('aria-expanded', String(open));
+    toggleBtn.textContent = open ? 'Hide' : 'Show';
+    bodyEl.hidden = !open;
+    if (open) panelEl.scrollTop = 0;
+    render();
+  }
+
+  // On a phone the panel folds away while you draw, so the map is free to tap.
+  function setDrawing(on) {
+    drawing = on;
+    map.getCanvas().style.cursor = on ? 'crosshair' : '';
+    if (on) map.doubleClickZoom.disable();
+    else map.doubleClickZoom.enable();
+    if (narrowScreen.matches) setPanelOpen(!on);
+    else render();
+  }
+
+  function undo() {
+    points.pop();
+    segments.length = Math.max(0, points.length - 1);
+    render();
+  }
+
+  function drawProfile(profile, m) {
+    const w = profileEl.clientWidth;
+    const h = profileEl.clientHeight;
+    if (!w || !h) return;
+    const ratio = window.devicePixelRatio || 1;
+    profileEl.width = Math.round(w * ratio);
+    profileEl.height = Math.round(h * ratio);
+    const g = profileEl.getContext('2d');
+    g.setTransform(ratio, 0, 0, ratio, 0, 0);
+    g.clearRect(0, 0, w, h);
+
+    const known = profile.filter((s) => s.z !== null);
+    if (known.length < 2) return;
+    let lo = Math.min(...known.map((s) => s.z));
+    let hi = Math.max(...known.map((s) => s.z));
+    if (hi - lo < 20) {
+      const mid = (hi + lo) / 2;
+      lo = mid - 10;
+      hi = mid + 10;
+    }
+    const total = profile[profile.length - 1].d || 1;
+    const top = 18;
+    const bottom = h - 18;
+    const x = (d) => 1 + (d / total) * (w - 2);
+    const y = (z) => top + ((hi - z) / (hi - lo)) * (bottom - top);
+
+    g.beginPath();
+    g.moveTo(x(known[0].d), bottom);
+    known.forEach((s) => g.lineTo(x(s.d), y(s.z)));
+    g.lineTo(x(known[known.length - 1].d), bottom);
+    g.closePath();
+    g.fillStyle = 'rgba(43, 198, 216, 0.18)';
+    g.fill();
+
+    g.beginPath();
+    known.forEach((s, i) => (i ? g.lineTo(x(s.d), y(s.z)) : g.moveTo(x(s.d), y(s.z))));
+    g.lineWidth = 2;
+    g.lineJoin = 'round';
+    g.strokeStyle = NIGHT;
+    g.stroke();
+
+    if (m.steepest) {
+      const a = profile[m.steepest.i - 1];
+      const b = profile[m.steepest.i];
+      g.beginPath();
+      g.arc(x((a.d + b.d) / 2), y((a.z + b.z) / 2), 5, 0, Math.PI * 2);
+      g.fillStyle = GLACIER;
+      g.fill();
+      g.lineWidth = 2;
+      g.strokeStyle = NIGHT;
+      g.stroke();
+    }
+
+    g.fillStyle = '#4a6078';
+    g.font = '700 12px "Atkinson Hyperlegible Next", system-ui, sans-serif';
+    g.textAlign = 'left';
+    g.textBaseline = 'top';
+    g.fillText(`${Math.round(hi)} m`, 2, 0);
+    g.textBaseline = 'bottom';
+    g.fillText(`${Math.round(lo)} m`, 2, h);
+    g.textAlign = 'right';
+    g.fillText(formatDistance(total), w - 2, h);
+  }
+
+  if ('ResizeObserver' in window) {
+    const profileObserver = new ResizeObserver(() => {
+      if (!profileEl.hidden && lastMeasure) drawProfile(lastProfile, lastMeasure);
+    });
+    profileObserver.observe(profileEl);
+  }
+
+  // Map events
+
+  map.on('load', () => {
+    map.addSource('route', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+    const lineLayout = { 'line-join': 'round', 'line-cap': 'round' };
+    const isLine = ['==', ['geometry-type'], 'LineString'];
+    map.addLayer({ id: 'route-casing', type: 'line', source: 'route', filter: isLine, layout: lineLayout, paint: { 'line-color': NIGHT, 'line-width': 7 } });
+    map.addLayer({ id: 'route-line', type: 'line', source: 'route', filter: isLine, layout: lineLayout, paint: { 'line-color': '#ffffff', 'line-width': 3.5 } });
+    map.addLayer({ id: 'route-points', type: 'circle', source: 'route', filter: ['==', ['get', 'kind'], 'point'], paint: { 'circle-radius': 5.5, 'circle-color': '#ffffff', 'circle-stroke-color': NIGHT, 'circle-stroke-width': 2.5 } });
+    map.addLayer({ id: 'route-steepest', type: 'circle', source: 'route', filter: ['==', ['get', 'kind'], 'steepest'], paint: { 'circle-radius': 8, 'circle-color': GLACIER, 'circle-stroke-color': NIGHT, 'circle-stroke-width': 2.5 } });
+    applyLayers();
+    ready = true;
+    drawBtn.disabled = false;
+    render();
+  });
+
+  map.on('click', (e) => {
+    if (!drawing) return;
+    const p = [e.lngLat.lng, e.lngLat.lat];
+    if (points.length) segments.push(sampleSegment(points[points.length - 1], p));
+    points.push(p);
+    render();
+  });
+
+  // Heights for points that were off screen fill in once their terrain loads.
+  map.on('idle', () => {
+    let changed = false;
+    for (const segment of segments) {
+      for (const s of segment) {
+        if (s.z === null) {
+          const z = heightAt(s.p);
+          if (z !== null) {
+            s.z = z;
+            changed = true;
+          }
+        }
+      }
+    }
+    if (changed) render();
+  });
+
+  let lastWarning = 0;
+  map.on('error', (e) => {
+    const error = e && e.error;
+    const offline = error && !error.status && /fetch|network|load failed/i.test(String(error.message));
+    if (!offline || Date.now() - lastWarning < 30000) return;
+    lastWarning = Date.now();
+    noticeEl.textContent = "Some map data didn't load. Check your connection.";
+    noticeEl.hidden = false;
+    setTimeout(() => { noticeEl.hidden = true; }, 8000);
+  });
+
+  // Buttons
+
+  drawBtn.addEventListener('click', () => setDrawing(!drawing));
+  miniDoneBtn.addEventListener('click', () => setDrawing(false));
+  undoBtn.addEventListener('click', undo);
+  miniUndoBtn.addEventListener('click', undo);
+
+  clearBtn.addEventListener('click', () => {
+    points.length = 0;
+    segments.length = 0;
+    render();
+  });
+
+  gpxBtn.addEventListener('click', () => {
+    if (lastProfile.length < 2) return;
+    const day = new Date().toISOString().slice(0, 10);
+    const name = `Verbier route ${day}`;
+    const trackPoints = lastProfile
+      .map((s) => `      <trkpt lat="${s.p[1].toFixed(6)}" lon="${s.p[0].toFixed(6)}">${s.z === null ? '' : `<ele>${s.z.toFixed(1)}</ele>`}</trkpt>`)
+      .join('\n');
+    const gpx = `<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="Trente" xmlns="http://www.topografix.com/GPX/1/1">
+  <metadata><name>${name}</name><time>${new Date().toISOString()}</time></metadata>
+  <trk>
+    <name>${name}</name>
+    <trkseg>
+${trackPoints}
+    </trkseg>
+  </trk>
+</gpx>
+`;
+    const url = URL.createObjectURL(new Blob([gpx], { type: 'application/gpx+xml' }));
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `trente-${day}.gpx`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+  });
+
+  toggleBtn.addEventListener('click', () => setPanelOpen(bodyEl.hidden));
+
+  render();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Trente: a 3D ski touring map of Verbier</title>
+  <meta name="description" content="A free 3D map for planning ski tours around Verbier: slopes over 30°, ski touring routes, route profiles and GPX export.">
+  <meta name="theme-color" content="#0c2a4d">
+  <meta property="og:title" content="Trente: a 3D ski touring map of Verbier">
+  <meta property="og:description" content="A free 3D map for planning ski tours around Verbier.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230c2a4d'/%3E%3Cpath d='M6 24H26M6 24 23.3 14M16 24a10 10 0 0 0-1.34-5' fill='none' stroke='%232bc6d8' stroke-width='3' stroke-linecap='round'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Next:wght@400;700;800&display=swap">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="hero">
+  <div class="wrap hero-inner">
+    <h1 class="wordmark">
+      <svg class="mark" viewBox="0 0 32 32" aria-hidden="true"><path d="M3 29H29M3 29 25.5 16M15 29a12 12 0 0 0-1.61-6" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round"/></svg>
+      Trente
+    </h1>
+    <p class="lede">A free 3D map for planning ski tours around Verbier.</p>
+    <a class="btn btn-primary" href="map.html">Open the map</a>
+  </div>
+
+  <!-- Each coloured stretch of the ridge is drawn at the angle its colour stands for:
+       yellow 30°, orange 37°, red 43°, purple 49°. The right-hand ridge is under 30°. -->
+  <svg class="hero-art" viewBox="-480 0 2400 560" preserveAspectRatio="xMidYMax slice" role="img" aria-labelledby="art-title">
+    <title id="art-title">A mountain with its steepest face coloured by slope angle and a zigzag skin track up the gentler ridge</title>
+    <path fill="#1a4170" d="M-480 560V300L-400 262-320 292-230 240-150 286-70 268 0 318 70 286 130 300 205 236 282 284 350 262 420 300 500 262 585 306 660 280 760 312 900 296 985 252 1060 288 1150 232 1235 282 1310 258 1390 296 1440 280 1520 250 1600 292 1690 244 1770 286 1850 262 1920 300V560Z"/>
+    <path fill="#2a5a8c" d="M-480 560V392L-400 356-310 384-230 340-150 372-70 350 0 400 80 360 150 388 235 338 300 374 360 352 430 396 520 380 700 420 1000 410 1200 392 1290 352 1360 380 1440 344 1520 372 1600 336 1690 378 1780 346 1860 380 1920 360V560Z"/>
+    <path fill="#f4f7fa" d="M300 560 330 520 470 470 560 418 640 358 710 292 770 222 830 165 900 198 1010 238 1120 290 1260 360 1440 430 1640 482 1920 506V560Z"/>
+    <path fill="#cfdcea" d="M830 165l-60 57-60 70-70 66-80 60-90 52-140 50-30 40h416l22-102 24-102 34-98Z"/>
+    <g fill="none" stroke-width="9" stroke-linecap="round">
+      <path stroke="#f2cf3b" d="M470 470 560 418"/>
+      <path stroke="#f2952a" d="M560 418 640 358"/>
+      <path stroke="#e2492f" d="M640 358 710 292"/>
+      <path stroke="#8c4cc4" d="M710 292 770 222"/>
+      <path stroke="#e2492f" d="M770 222 830 165"/>
+    </g>
+    <g fill="none" stroke="#0c2a4d" stroke-width="2.5">
+      <path stroke-dasharray="6 6" d="M470 470H586"/>
+      <path d="M522 470a52 52 0 0 0-6.97-26"/>
+    </g>
+    <text x="532" y="464" fill="#0c2a4d" font-size="24" font-weight="800">30°</text>
+    <path fill="none" stroke="#0c2a4d" stroke-width="3" stroke-dasharray="9 7" stroke-linejoin="round" d="M1210 505 1080 470 1180 428 1050 392 1140 350 1020 314 1072 290 1010 246 940 220 880 196 838 174"/>
+    <g fill="#ffffff" stroke="#0c2a4d" stroke-width="2.5">
+      <circle cx="1210" cy="505" r="6"/>
+      <circle cx="1080" cy="470" r="6"/>
+      <circle cx="1180" cy="428" r="6"/>
+      <circle cx="1050" cy="392" r="6"/>
+      <circle cx="1140" cy="350" r="6"/>
+      <circle cx="1020" cy="314" r="6"/>
+      <circle cx="1072" cy="290" r="6"/>
+      <circle cx="830" cy="165" r="7"/>
+    </g>
+    <path fill="#f4f7fa" d="M-480 534C-240 518 0 540 240 530S520 514 720 532 1190 512 1440 530 1700 516 1920 530V560H-480Z"/>
+  </svg>
+</header>
+
+<main>
+  <section class="section" aria-labelledby="why">
+    <div class="wrap">
+      <h2 id="why">Why I built it</h2>
+      <div class="prose">
+        <p>I ski in Verbier and used FATMAP to look at slopes in 3D before skiing them. Strava bought FATMAP in 2023 and shut it down on 1 October 2024. The apps people moved to didn't replace it for me, so I'm building my own, starting with the mountains I know best.</p>
+        <p>The name is French for thirty. Slab avalanches need a slope of at least 30° to be triggered, so the map colours every slope that steep. An avalanche can still run out onto the flatter ground below.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="section section-white" aria-labelledby="what">
+    <div class="wrap">
+      <h2 id="what">What the map does</h2>
+      <ul class="features">
+        <li class="feature">
+          <svg viewBox="0 0 32 32" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round"><path d="M3 26 12 10l5 8 4-5 8 13Z"/><path d="M9.5 14.5 12 17l2.5-2.5"/></svg>
+          <h3>3D terrain</h3>
+          <p>Tilt and turn the mountains with two fingers. swisstopo's aerial photos are laid over the terrain.</p>
+        </li>
+        <li class="feature">
+          <svg viewBox="0 0 32 32" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M3 26H29M3 26 25.5 13M15 26a12 12 0 0 0-1.61-6"/></svg>
+          <h3>Slopes over 30°</h3>
+          <p>swisstopo's slope layer colours every slope over 30°, in classes recommended by the SLF. The colour key is in the map.</p>
+        </li>
+        <li class="feature">
+          <svg viewBox="0 0 32 32" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path stroke-dasharray="3.5 3" d="M6 27 22 23 9 18 23 13 13 8"/><circle cx="13" cy="6" r="2.4"/></svg>
+          <h3>Ski touring routes</h3>
+          <p>Switch on swisstopo's ski touring routes to see where tours usually go.</p>
+        </li>
+        <li class="feature">
+          <svg viewBox="0 0 32 32" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5v22h24"/><path d="m8 22 5-7 4 3 5-9 5 5"/></svg>
+          <h3>Route drawing</h3>
+          <p>Tap to add points and see the distance, the climb and descent, an elevation profile and the steepest part of your line.</p>
+        </li>
+        <li class="feature">
+          <svg viewBox="0 0 32 32" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 4v15M10 13l6 6 6-6M5 21v6h22v-6"/></svg>
+          <h3>GPX export</h3>
+          <p>Save your route as a GPX file for a GPS watch or another app.</p>
+        </li>
+      </ul>
+    </div>
+  </section>
+
+  <section class="section" aria-labelledby="how">
+    <div class="wrap">
+      <h2 id="how">How to use it</h2>
+      <ol class="steps">
+        <li><p>Open the map and find your area. Pinch to zoom, and drag with two fingers to tilt and turn.</p></li>
+        <li><p>Look at the slope colours, and switch on ski touring routes to see the usual lines.</p></li>
+        <li><p>Tap Draw route, then tap along your line. Check the profile, then tap GPX to save it.</p></li>
+      </ol>
+    </div>
+  </section>
+
+  <section class="section safety" aria-labelledby="safety">
+    <div class="wrap">
+      <h2 id="safety">A planning aid, not avalanche advice</h2>
+      <p class="lead">This map shows the shape of the mountain. It knows nothing about today's snow, so it can't tell you whether a slope is safe.</p>
+      <ul class="musts">
+        <li>Read the SLF avalanche bulletin for your area before every tour.</li>
+        <li>Go with a mountain guide, or with partners trained in avalanche safety.</li>
+        <li>Carry a transceiver, shovel and probe, and know how to use them.</li>
+      </ul>
+      <a class="btn btn-primary" href="https://whiterisk.ch/en/conditions" target="_blank" rel="noopener">Open the SLF avalanche bulletin</a>
+
+      <h3>Know the map's limits</h3>
+      <ul class="limits">
+        <li>swisstopo works out the slope colours from a 10 m elevation model, so short steep pitches, gullies and cornices may not show.</li>
+        <li>Avalanches that start on steep slopes can run out onto flatter ground below, and slabs can be triggered from a distance.</li>
+        <li>"Steepest part" measures your line, not the slope around it. A traverse across a 40° slope can show 10°.</li>
+        <li>The aerial photos aren't live and don't show today's snow.</li>
+        <li>Route lines show where tours usually go, not that they're safe today.</li>
+      </ul>
+    </div>
+  </section>
+
+  <section class="section" aria-labelledby="credits">
+    <div class="wrap">
+      <h2 id="credits">Data and credits</h2>
+      <ul class="credit-list">
+        <li><strong>Aerial photos, slope classes and ski touring routes:</strong> <a href="https://www.swisstopo.admin.ch/en" target="_blank" rel="noopener">© swisstopo</a>, the Swiss Federal Office of Topography</li>
+        <li><strong>Terrain:</strong> <a href="https://mapterhorn.com/attribution" target="_blank" rel="noopener">© Mapterhorn</a>, built from open elevation data</li>
+        <li><strong>Map engine:</strong> <a href="https://maplibre.org" target="_blank" rel="noopener">MapLibre GL JS</a>, open source</li>
+        <li><strong>Avalanche bulletin:</strong> <a href="https://www.slf.ch/en/" target="_blank" rel="noopener">WSL Institute for Snow and Avalanche Research SLF</a>, linked rather than copied</li>
+      </ul>
+      <p class="small">Trente isn't affiliated with swisstopo, the SLF, Mapterhorn, Strava or FATMAP.</p>
+    </div>
+  </section>
+</main>
+
+<footer class="site-footer">
+  <div class="wrap">
+    <p>Made by a student who skis in Verbier.</p>
+    <a href="map.html">Open the map</a>
+  </div>
+</footer>
+
+</body>
+</html>
